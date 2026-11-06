@@ -1,0 +1,411 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===================== ជំនួយ =====================
+    function signedIn() { return request.auth != null; }
+    function profilePath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function active() {   // គ្រូ ឬ Admin (មិនរាប់គណនីប្រធានថ្នាក់)
+      return signedIn()
+        && exists(profilePath())
+        && get(profilePath()).data.enabled == true
+        && get(profilePath()).data.get('role', 'member') != 'monitor';
+    }
+    // គណនីប្រធានថ្នាក់ (role "monitor") ដែលមានសិទ្ធិលើ mc/{k} តែមួយគត់
+    function isMonitorOf(k) {
+      return signedIn()
+        && exists(profilePath())
+        && get(profilePath()).data.enabled == true
+        && get(profilePath()).data.get('role', '') == 'monitor'
+        && get(profilePath()).data.k == k;
+    }
+    // គ្រូជាម្ចាស់គណនីប្រធានថ្នាក់នេះ
+    function ownsMonitor(d) {
+      return active() && d.get('role', '') == 'monitor' && d.t == myId();
+    }
+    function myId() { return get(profilePath()).data.id; }          // ឧ. "T002"
+    function isAdmin() { return active() && get(profilePath()).data.role == 'admin'; }
+    function isOwner(ownerId) { return active() && ownerId == myId(); }
+    function changedOnly(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    // ===================== users/{uid} =====================
+    // តួនាទី + សិទ្ធិប្រើ។ មានតែ Admin ទេអាចកែ។
+    match /users/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      // គ្រូបង្កើតគណនីប្រធានថ្នាក់បាន (role "monitor" · t = ខ្លួនឯង · k ចាប់ផ្ដើមដោយ ID ខ្លួន)
+      allow create: if isAdmin()
+        || (ownsMonitor(request.resource.data)
+            && request.resource.data.keys().hasOnly(['id','name','role','enabled','mustChange','t','k','c','r','sk','sn'])
+            && request.resource.data.k.split('_')[0] == myId());
+      allow delete: if isAdmin() || ownsMonitor(resource.data);
+      // គ្រូម្នាក់ៗអាចកែបានតែ mustChange: true -> false (បន្ទាប់ពីប្ដូរលេខសម្ងាត់)
+      // គ្រូបិទ/បើកគណនីប្រធានថ្នាក់របស់ខ្លួនបាន (enabled តែប៉ុណ្ណោះ)
+      allow update: if isAdmin()
+        || (request.auth.uid == uid && changedOnly(['mustChange'])
+            && request.resource.data.mustChange == false)
+        || (ownsMonitor(resource.data) && changedOnly(['enabled']));
+    }
+
+    // ===================== បញ្ជីគ្រូ =====================
+    match /app/teachers {
+      allow read: if active();
+      allow write: if isAdmin();
+    }
+    // ទិន្នន័យចាស់ (document ធំ) → Admin អានបានតែដើម្បីបំលែង មិនអាចសរសេរ
+    match /app/{legacy} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // ===================== ការកំណត់ទូទៅ (Admin សរសេរ) =====================
+    match /cfg/{key} {
+      allow read: if active();
+      allow write: if isAdmin();
+    }
+
+    // ===================== ទិន្នន័យរបស់គ្រូម្នាក់ៗ =====================
+    // doc ID = លេខសម្គាល់គ្រូ (ឧ. T002) ហើយ field "o" = ម្ចាស់ (ត្រូវដូច doc ID)
+    // កិច្ចការ និងលទ្ធផលសិក្សា៖ គ្រូគ្រប់គ្នាអានបាន ម្ចាស់ ឬ Admin សរសេរ
+    match /tasks/{tid} {
+      allow read: if active();
+      allow create, update: if (isAdmin() || isOwner(tid)) && request.resource.data.o == tid;
+      allow delete: if isAdmin();
+    }
+    match /rs/{tid} {
+      allow read: if active();
+      allow create, update: if (isAdmin() || isOwner(tid)) && request.resource.data.o == tid;
+      allow delete: if isAdmin();
+    }
+    // របាយការណ៍ និងស្នាដៃ៖ ម្ចាស់ ឬ Admin តែប៉ុណ្ណោះ អាន/សរសេរ
+    // (ការ Query របស់គ្រូត្រូវមាន where("o","==", ID ខ្លួនឯង) — កម្មវិធីធ្វើរួចហើយ)
+    match /wr/{tid} {
+      allow read: if isAdmin() || isOwner(resource.data.o);
+      allow create, update: if (isAdmin() || isOwner(tid)) && request.resource.data.o == tid;
+      allow delete: if isAdmin();
+    }
+    match /ah/{tid} {
+      allow read: if isAdmin() || isOwner(resource.data.o);
+      allow create, update: if (isAdmin() || isOwner(tid)) && request.resource.data.o == tid;
+      allow delete: if isAdmin();
+    }
+
+    // ===================== កាលវិភាគបង្រៀន (ផ្ទាំង ១១) =====================
+    // doc ID = លេខសម្គាល់គ្រូ · គ្រូទាំងអស់អាន · ម្ចាស់ ឬ Admin សរសេរ
+    match /sched/{tid} {
+      allow read: if active();
+      allow create, update: if (isAdmin() || isOwner(tid)) && request.resource.data.o == tid;
+      allow delete: if isAdmin();
+    }
+
+    // ===================== Timesheet & Workplan ប្រចាំខែ (ផ្ទាំង ១២) =====================
+    // doc ID = "<ID គ្រូ>_<YYYY-MM>" (ឧ. T002_2026-10) · ម្ចាស់ ឬ Admin តែប៉ុណ្ណោះ អាន/សរសេរ
+    match /ts/{key} {
+      allow read: if isAdmin() || isOwner(resource.data.o);
+      allow create, update: if (isAdmin() || isOwner(request.resource.data.o))
+        && key.split('_')[0] == request.resource.data.o;
+      allow delete: if isAdmin();
+    }
+
+    // ===================== សម្រង់អត្ថបទប្រចាំខែ (គ្រប់គ្រងថ្នាក់រៀន) =====================
+    // doc ID = "<ID គ្រូ>_<YYYY-MM>_<ថ្នាក់>" · ម្ចាស់ ឬ Admin តែប៉ុណ្ណោះ អាន/សរសេរ
+    match /cx/{key} {
+      allow read: if isAdmin() || isOwner(resource.data.o);
+      allow create, update: if (isAdmin() || isOwner(request.resource.data.o))
+        && key.split('_')[0] == request.resource.data.o;
+      allow delete: if isAdmin();
+    }
+
+    // ===================== វត្តមានតាមម៉ោង (att.js) =====================
+    // doc ID = "<ID គ្រូ>_<ថ្នាក់>_<YYYY-MM>" · k = "<ID គ្រូ>_<ថ្នាក់>" (ដូច mc) · គ្រូម្ចាស់ Admin ឬប្រធានថ្នាក់នៃថ្នាក់នោះ អាន/សរសេរ
+    function attOwner(id) { return active() && id.matches(myId() + '_[A-Za-z0-9-]+_[0-9]{4}-[0-9]{2}'); }
+    function attMon(id) {
+      return isMonitorOf(get(profilePath()).data.get('k', '#'))
+        && id.matches(get(profilePath()).data.k + '_[0-9]{4}-[0-9]{2}');
+    }
+    // គ្រូទាំងអស់អានបាន (សម្រង់អត្ថបទរបស់គ្រូមុខវិជ្ជាទាញឈ្មោះសិស្សអវត្តមាន) · សរសេរ៖ គ្រូម្ចាស់ Admin ឬប្រធានថ្នាក់
+    match /att/{id} {
+      allow read: if active() || attMon(id);
+      allow create, update: if (isAdmin() || attOwner(id) || attMon(id))
+        && request.resource.data.keys().hasOnly(['o', 'k', 'm', 'cn', 'd'])
+        && id == request.resource.data.k + '_' + request.resource.data.m
+        && request.resource.data.k.split('_')[0] == request.resource.data.o
+        && request.resource.data.d is map;
+      allow delete: if isAdmin();
+    }
+
+    // ===================== គណនីប្រធានថ្នាក់ (មួយក្នុងមួយថ្នាក់) =====================
+    // doc ID = "<ID គ្រូ>_<ថ្នាក់>" · គ្រូម្ចាស់ ឬ Admin គ្រប់គ្រង · ប្រធានថ្នាក់អាន/កែបានតែ j (វត្តមាន · ប្លង់តុ · សម្រង់អត្ថបទ)
+    match /mc/{k} {
+      allow read: if isAdmin() || (active() && resource.data.o == myId()) || isMonitorOf(k);
+      allow create: if (isAdmin() || isOwner(request.resource.data.o))
+        && k.split('_')[0] == request.resource.data.o
+        && request.resource.data.j.size() < 900000;
+      allow update: if ((isAdmin() || isOwner(resource.data.o))
+            && request.resource.data.o == resource.data.o
+            && request.resource.data.j.size() < 900000)
+        || (isMonitorOf(k) && changedOnly(['j']) && request.resource.data.j.size() < 900000);
+      allow delete: if isAdmin() || isOwner(resource.data.o);
+    }
+
+    // ===================== ប្រវត្តិសកម្មភាពប្រធាន/អនុប្រធានថ្នាក់ =====================
+    // បន្ថែមបានតែដោយគណនីប្រធានថ្នាក់ខ្លួនឯង (by = ID ខ្លួន · at = ម៉ោង Server) · កែ/លុបមិនបាន (លើកលែង Admin)
+    match /mclog/{id} {
+      allow create: if isMonitorOf(request.resource.data.k)
+        && request.resource.data.keys().hasOnly(['k','o','by','r','sn','at','a'])
+        && request.resource.data.k.split('_')[0] == request.resource.data.o
+        && request.resource.data.by == myId()
+        && request.resource.data.at == request.time
+        && request.resource.data.a is list && request.resource.data.a.size() <= 50;
+      allow read: if isAdmin() || (active() && resource.data.o == myId());
+      allow update, delete: if isAdmin();
+    }
+
+    // ===================== មេរៀនសង្ខេបដែលគ្រូបង្កើត (CMS) =====================
+    // គ្រូទាំងអស់អាន · ម្ចាស់ (o) ឬ Admin បង្កើត/កែ/លុប
+    match /lsn/{id} {
+      allow read: if active();
+      allow create: if (isAdmin() || isOwner(request.resource.data.o))
+        && request.resource.data.j is string && request.resource.data.j.size() < 950000;
+      allow update: if (isAdmin() || (isOwner(resource.data.o) && request.resource.data.o == resource.data.o))
+        && request.resource.data.j is string && request.resource.data.j.size() < 950000;
+      allow delete: if isAdmin() || isOwner(resource.data.o);
+    }
+
+    // ===================== ហត្ថលេខារបស់គ្រូ (រូបភាព PNG តូច) =====================
+    // doc ID = លេខសម្គាល់គ្រូ · ម្ចាស់ ឬ Admin តែប៉ុណ្ណោះ អាន/សរសេរ
+    match /sig/{tid} {
+      allow read: if isAdmin() || isOwner(resource.data.o);
+      allow create, update: if (isAdmin() || isOwner(tid)) && request.resource.data.o == tid;
+      allow delete: if isAdmin() || isOwner(tid);
+    }
+
+    // ===================== ប្រវត្តិរូបគ្រូ (រូបថត + ព័ត៌មានផ្ទាល់ខ្លួន · គ្រូកែខ្លួនឯង) =====================
+    // doc ID = លេខសម្គាល់គ្រូ។ ម្ចាស់ ឬ Admin សរសេរ · គ្រូទាំងអស់អាន
+    // កំណត់វាលដែលអនុញ្ញាត និងទំហំ (រូបថត JPEG តូច ≤ ~70 KB ជា data URL)
+    match /profiles/{tid} {
+      allow read: if active();
+      allow create, update: if (isAdmin() || isOwner(tid))
+        && request.resource.data.o == tid
+        && request.resource.data.keys().hasOnly(['o','g','dob','ph','ad','bio','photo','u','nm','sub','deg','sd'])
+        && request.resource.data.get('photo','').size() < 70000
+        && request.resource.data.get('bio','').size() <= 500
+        && request.resource.data.get('ph','').size() <= 40
+        && request.resource.data.get('ad','').size() <= 200
+        && request.resource.data.get('nm','').size() <= 100
+        && request.resource.data.get('sub','').size() <= 60
+        && request.resource.data.get('deg','').size() <= 80
+        && request.resource.data.get('sd','').size() <= 10;
+      allow delete: if isAdmin();
+    }
+
+    // ===================== ឯកសារជំនួយ (ម្ចាស់ o ម្នាក់ៗ) =====================
+    match /lib/{u} {
+      allow read: if active();
+      allow create: if isAdmin() || (isOwner(request.resource.data.o));
+      allow update: if isAdmin()
+        || (isOwner(resource.data.o) && request.resource.data.o == resource.data.o);
+      allow delete: if isAdmin() || isOwner(resource.data.o);
+    }
+
+    // ===================== កាលវិភាគថ្នាក់និទស្សន៍ =====================
+    // Admin ៖ គ្រប់យ៉ាង។ គ្រូដែលត្រូវបានកំណត់ក្នុងជួរ (t) ៖ កែបានតែ ខែ/ថ្ងៃ/ម៉ោង/មុខវិជ្ជា/ចំណាំ
+    match /exrows/{id} {
+      allow read: if active();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (isOwner(resource.data.t) && changedOnly(['m','dt','tm','sc','nt']));
+    }
+
+    // ===================== សង្កេតថ្នាក់រៀន =====================
+    // Admin ៖ គ្រប់យ៉ាង (t = គ្រូត្រូវសង្កេត, o = អ្នកសង្កេត, dt = ថ្ងៃ)
+    // អ្នកសង្កេត (o) ៖ កែពិន្ទុ កំណត់ត្រា និងព័ត៌មានផ្សេងៗ លើកលែង t, o, dt
+    // គ្រូត្រូវសង្កេត (t) ៖ កែបានតែប្រអប់ចំណាំរបស់ខ្លួន (g[2], g[4]) និងវាលព័ត៌មានទូទៅ
+    function teacherNotesOnly() {
+      return request.resource.data.g.size() == resource.data.g.size()
+        && request.resource.data.g[0] == resource.data.g[0]
+        && request.resource.data.g[1] == resource.data.g[1]
+        && request.resource.data.g[3] == resource.data.g[3]
+        && request.resource.data.g[5] == resource.data.g[5];
+    }
+    match /obsrows/{id} {
+      allow read: if active();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (isOwner(resource.data.o)
+            && changedOnly(['sub','cl','tm','rm','n','ab','ch','ls','ct','sc','cm','g']))
+        || (isOwner(resource.data.t)
+            && changedOnly(['sub','rm','n','ab','ch','ls','ct','g'])
+            && teacherNotesOnly());
+    }
+
+    // ===================== តេស្ត (លទ្ធផលសិក្សា › តេស្ត) =====================
+    // ធនាគារលំហាត់៖ doc ID = លេខសម្គាល់គ្រូ · គ្រូទាំងអស់អាន · ម្ចាស់ ឬ Admin សរសេរ
+    match /qb/{tid} {
+      allow read: if active();
+      allow create, update: if (isAdmin() || isOwner(tid)) && request.resource.data.o == tid
+        && request.resource.data.j.size() < 900000;
+      allow delete: if isAdmin() || isOwner(tid);
+    }
+    // ធនាគារលំហាត់ (មួយឯកសារក្នុងមួយលំហាត់)៖ doc ID = "<ID គ្រូ>_<id>" · គ្រូទាំងអស់អាន · ម្ចាស់ (o) ឬ Admin សរសេរ
+    match /qbq/{id} {
+      allow read: if active();
+      allow create: if (isAdmin() || isOwner(request.resource.data.o))
+        && id.split('_')[0] == request.resource.data.o
+        && request.resource.data.q is string && request.resource.data.q.size() < 30000;
+      allow update: if (isAdmin() || isOwner(resource.data.o))
+        && request.resource.data.o == resource.data.o
+        && request.resource.data.q is string && request.resource.data.q.size() < 30000;
+      allow delete: if isAdmin() || isOwner(resource.data.o);
+    }
+    // រូបភាពលំហាត់ (ធនាគារ)៖ doc ID = ដូច qbq · គ្រូទាំងអស់អាន · ម្ចាស់ ឬ Admin សរសេរ
+    match /qimg/{id} {
+      allow read: if active();
+      allow create, update: if (isAdmin() || isOwner(request.resource.data.o))
+        && id.split('_')[0] == request.resource.data.o
+        && request.resource.data.d is string && request.resource.data.d.size() < 900000;
+      allow delete: if isAdmin() || isOwner(resource.data.o);
+    }
+    // រូបភាពក្នុងតេស្ត៖ doc ID = "<តេស្ត>_<លំហាត់>" · សិស្សអានបានពេលតេស្តបើក (គ្មាន Login)
+    match /timg/{id} {
+      allow get: if active() || get(/databases/$(database)/documents/tests/$(resource.data.t)).data.open == true;
+      allow create, update: if (isAdmin() || isOwner(request.resource.data.o))
+        && request.resource.data.d is string && request.resource.data.d.size() < 900000;
+      allow delete: if isAdmin() || isOwner(resource.data.o);
+    }
+    // ===================== ហាត់លំហាត់៖ តារាងហាត់ថ្នាក់ =====================
+    // តំណហាត់ថ្នាក់ (គ្រូបង្កើត)៖ សិស្សអានបានដោយគ្មាន Login តែពេលបើក
+    match /pcls/{code} {
+      allow get: if resource.data.open == true || active();
+      allow list: if active();
+      allow create: if isAdmin() || isOwner(request.resource.data.o);
+      allow update, delete: if isAdmin() || isOwner(resource.data.o);
+    }
+    // ពានរង្វាន់សិស្ស៖ doc ID = "<កូដ>_<k>" · សរសេរបាន (គ្មាន Login) តែពេលតំណបើក · វាលកំណត់ · អានបានតែគ្រូ
+    match /prt/{id} {
+      allow create, update: if request.resource.data.keys().hasOnly(['c','k','n','g','t','u'])
+        && id == request.resource.data.c + '_' + request.resource.data.k
+        && request.resource.data.n is string && request.resource.data.n.size() <= 100
+        && request.resource.data.t is map && request.resource.data.t.size() <= 300
+        && request.resource.data.u == request.time
+        && get(/databases/$(database)/documents/pcls/$(request.resource.data.c)).data.open == true
+        && (resource == null || (resource.data.c == request.resource.data.c && resource.data.k == request.resource.data.k));
+      allow read: if active();
+      allow delete: if isAdmin() || isOwner(get(/databases/$(database)/documents/pcls/$(resource.data.c)).data.o);
+    }
+    // កំណត់ហេតុប្រជុំ (បច្ចេកទេស · រួម · គណៈកម្មការស្វ័យភាព)៖ គ្រប់គ្រូអានបាន · អ្នកកត់ត្រា (o) ឬ Admin កែ/លុប
+    match /mt/{id} {
+      allow read: if active();
+      allow create: if (isAdmin() || isOwner(request.resource.data.o)) && request.resource.data.j.size() < 200000;
+      allow update: if (isAdmin() || (isOwner(resource.data.o) && request.resource.data.o == resource.data.o))
+        && request.resource.data.j.size() < 200000;
+      allow delete: if isAdmin() || isOwner(resource.data.o);
+    }
+    // ===================== plc/{id} — កំណត់ហេតុ PLC ឯកជន =====================
+    // អានបានតែ៖ អ្នកកត់ត្រា (o) · គ្រូចែករំលែក (s) · Admin · គ្រូផ្សេងមិនអាចអានបានទេ
+    match /plc/{id} {
+      allow read: if isAdmin() || isOwner(resource.data.o)
+        || (active() && myId() in resource.data.s);
+      allow create: if (isAdmin() || isOwner(request.resource.data.o))
+        && request.resource.data.keys().hasOnly(['o','s','j','u'])
+        && request.resource.data.s is list && request.resource.data.s.size() <= 10
+        && request.resource.data.j is string && request.resource.data.j.size() < 200000;
+      allow update: if (isAdmin() || (isOwner(resource.data.o) && request.resource.data.o == resource.data.o))
+        && request.resource.data.keys().hasOnly(['o','s','j','u'])
+        && request.resource.data.s is list && request.resource.data.s.size() <= 10
+        && request.resource.data.j is string && request.resource.data.j.size() < 200000;
+      allow delete: if isAdmin() || isOwner(resource.data.o);
+    }
+    // ===================== dl/{id} — កំណត់ហេតុប្រចាំថ្ងៃ (ឯកជន ១០០%) =====================
+    // កិច្ចសន្យាសិស្ស · វគ្គបំប៉ន · កំណត់ហេតុផ្ទាល់ខ្លួន — អាន/កែ/លុប បានតែម្ចាស់ (o)
+    match /dl/{id} {
+      allow read, delete: if isOwner(resource.data.o);
+      allow create: if isOwner(request.resource.data.o)
+        && request.resource.data.keys().hasOnly(['o','k','j','u'])
+        && request.resource.data.k in ['c','t','j']
+        && request.resource.data.j is string && request.resource.data.j.size() < 200000;
+      allow update: if isOwner(resource.data.o) && request.resource.data.o == resource.data.o
+        && request.resource.data.keys().hasOnly(['o','k','j','u'])
+        && request.resource.data.k in ['c','t','j']
+        && request.resource.data.j is string && request.resource.data.j.size() < 200000;
+    }
+    // វិញ្ញាសា (គ្មានចម្លើយ)៖ សិស្សអានបានដោយគ្មាន Login តែពេលកំពុងបើក
+    match /tests/{id} {
+      allow get: if resource.data.open == true || active();
+      allow list: if active();
+      allow create: if isAdmin() || isOwner(request.resource.data.o);
+      allow update, delete: if isAdmin() || isOwner(resource.data.o);
+    }
+    // ចម្លើយត្រឹមត្រូវ៖ តែម្ចាស់តេស្ត ឬ Admin
+    match /tkeys/{id} {
+      allow read, update, delete: if isAdmin() || isOwner(resource.data.o);
+      allow create: if isAdmin() || isOwner(request.resource.data.o);
+    }
+    // ===================== សុវត្ថិភាពតេស្ត (test.html · គ្មាន Login) =====================
+    // តេស្ត v2៖ សិស្សចាប់ផ្ដើម → st/{t}_{សិស្ស} (ម៉ោង Server · dv = សញ្ញាសម្ងាត់របស់ឧបករណ៍ · លេខកូដចូល)
+    //   ផ្ញើ subs បានតែឧបករណ៍ដែលចាប់ផ្ដើម (dv ត្រូវគ្នា) ក្នុងរយៈពេល dur + ១០ នាទី · ឈ្មោះត្រូវតែមានក្នុងបញ្ជីឈ្មោះតេស្ត
+    //   rcpt/{t}_{សិស្ស} = បង្កាន់ដៃ (បង្កើតជាមួយ subs ក្នុង batch តែមួយ) → សិស្សពិនិត្យបានថាផ្ញើដល់ពិតមែន (អ៊ីនធឺណិតខ្សោយ)
+    function tdoc(t) { return get(/databases/$(database)/documents/tests/$(t)).data; }
+    function onRoster(t, k, n) { return {'k': k, 'n': n} in tdoc(t).get('names', []); }
+    function stOk(sid, dv, t) {
+      return exists(/databases/$(database)/documents/st/$(sid))
+        && get(/databases/$(database)/documents/st/$(sid)).data.dv == dv
+        && (tdoc(t).get('dur', 0) == 0
+          || request.time < get(/databases/$(database)/documents/st/$(sid)).data.at + duration.value(int(tdoc(t).dur) * 60 + 600, 's'));
+    }
+    // ចម្លើយសិស្ស៖ ផ្ញើបានតែម្ដង (គ្មាន Login) ពេលតេស្តកំពុងបើក · មិនអាចកែ
+    match /subs/{sid} {
+      // lv = ចាកចេញពីផ្ទាំង (ដង) · lt = វិនាទី · cp = ចម្លង/បិទភ្ជាប់ · ax = ផ្ញើស្វ័យប្រវត្តិ (ការពារការលួចមើល) · dv = សញ្ញាឧបករណ៍ (v2)
+      allow create: if request.resource.data.keys().hasOnly(['t','sid','sn','a','at','dur','lv','lt','cp','ax','dv'])
+        && request.resource.data.get('lv', 0) is int && request.resource.data.get('lv', 0) <= 10000
+        && request.resource.data.get('lt', 0) is int && request.resource.data.get('lt', 0) <= 86400
+        && request.resource.data.get('cp', 0) is int && request.resource.data.get('cp', 0) <= 10000
+        && request.resource.data.get('ax', false) is bool
+        && sid == request.resource.data.t + '_' + request.resource.data.sid
+        && request.resource.data.sn is string && request.resource.data.sn.size() <= 100
+        && request.resource.data.a is map && request.resource.data.a.size() <= 200
+        && tdoc(request.resource.data.t).open == true
+        && onRoster(request.resource.data.t, request.resource.data.sid, request.resource.data.sn)
+        && (tdoc(request.resource.data.t).get('v', 1) < 2
+          || stOk(sid, request.resource.data.get('dv', ''), request.resource.data.t));
+      allow read: if active();
+      allow delete: if isAdmin()
+        || isOwner(get(/databases/$(database)/documents/tests/$(resource.data.t)).data.o);
+      allow update: if false;
+    }
+    // ការចាប់ផ្ដើមធ្វើតេស្ត (v2)៖ មួយឈ្មោះ មួយឧបករណ៍ · លេខកូដចូល (pc) ត្រូវតែត្រូវ បើតេស្តតម្រូវ · គ្រូមើល/លុប (អនុញ្ញាតឱ្យធ្វើម្ដងទៀត)
+    match /st/{sid} {
+      allow create: if request.resource.data.keys().hasOnly(['t','sid','sn','dv','at','pc'])
+        && sid == request.resource.data.t + '_' + request.resource.data.sid
+        && request.resource.data.at == request.time
+        && request.resource.data.dv is string && request.resource.data.dv.size() >= 16 && request.resource.data.dv.size() <= 64
+        && tdoc(request.resource.data.t).open == true
+        && tdoc(request.resource.data.t).get('v', 1) >= 2
+        && onRoster(request.resource.data.t, request.resource.data.sid, request.resource.data.sn)
+        && (tdoc(request.resource.data.t).get('pc', false) != true
+          || request.resource.data.get('pc', '') == get(/databases/$(database)/documents/tkeys/$(request.resource.data.t)).data.get('pc', '#'));
+      allow read: if active();
+      allow delete: if isAdmin() || isOwner(tdoc(resource.data.t).o);
+      allow update: if false;
+    }
+    // បង្កាន់ដៃផ្ញើ៖ អ្នកណាក៏អានបាន (មិនមានចម្លើយ) · បង្កើតបានតែជាមួយ subs ថ្មី (batch)
+    match /rcpt/{sid} {
+      allow get: if true;
+      allow list: if active();
+      allow create: if request.resource.data.keys().hasOnly(['t','at'])
+        && request.resource.data.at == request.time
+        && sid.matches(request.resource.data.t + '_.+')
+        && existsAfter(/databases/$(database)/documents/subs/$(sid))
+        && !exists(/databases/$(database)/documents/subs/$(sid));
+      allow delete: if isAdmin() || isOwner(tdoc(resource.data.t).o);
+      allow update: if false;
+    }
+
+    // ហាមផ្សេងទៀតទាំងអស់
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
