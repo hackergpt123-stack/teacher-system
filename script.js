@@ -13,13 +13,13 @@
    ======================================================================== */
 (function () {
 var firebaseConfig = {
-    apiKey: "AIzaSyDLMqiI5PBmINWKNxWz4BMXdndL40TeXTo",
-    authDomain: "math-vadh.firebaseapp.com",
-    projectId: "math-vadh",
-    storageBucket: "math-vadh.firebasestorage.app",
-    messagingSenderId: "475608743844",
-    appId: "1:475608743844:web:f53dec60ae959d4613cb31"
-  };
+  apiKey: "AIzaSyDLMqiI5PBmINWKNxWz4BMXdndL40TeXTo",
+  authDomain: "math-vadh.firebaseapp.com",
+  projectId: "math-vadh",
+  storageBucket: "math-vadh.firebasestorage.app",
+  messagingSenderId: "475608743844",
+  appId: "1:475608743844:web:f53dec60ae959d4613cb31"
+};
   var B = "https://www.gstatic.com/firebasejs/10.8.0/";
   /* ផ្ទុក SDK ដោយ dynamic import ដើម្បីឱ្យកូដកម្មវិធីគោលនៅជា script ធម្មតា */
   window.FBREADY = Promise.all([
