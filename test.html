@@ -70,8 +70,7 @@ select,input[type=text]{width:100%;padding:10px 12px;border:1.5px solid var(--li
    ======================================================================== */
 import{initializeApp}from"https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
 import{getFirestore,doc,getDoc,setDoc,writeBatch,serverTimestamp}from"https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-lite.js";
-const db=getFirestore(initializeApp({apiKey:"AIzaSyAtfudfLGNHCFYUwGxLM8_lfSZ-jYWQ6J8",authDomain:"math-teacher-system-bt.firebaseapp.com",projectId:"math-teacher-system-bt",
-  storageBucket:"math-teacher-system-bt.firebasestorage.app",messagingSenderId:"134725787928",appId:"1:134725787928:web:50343e4b7c7247833c3e6d"}));
+const FBC={apiKey:"AIzaSyDLMqiI5PBmINWKNxWz4BMXdndL40TeXTo",authDomain:"math-vadh.firebaseapp.com",projectId:"math-vadh",storageBucket:"math-vadh.firebasestorage.app",messagingSenderId:"475608743844",appId:"1:475608743844:web:f53dec60ae959d4613cb31"};
 const $=id=>document.getElementById(id),app=$("app"),id=new URLSearchParams(location.search).get("t")||"";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const tx=s=>esc(String(s??"").replace(/\$\$[\s\S]*?\$\$|\$[^$]*\$/g,m=>m.replace(/\s*\\\\\s*\n\s*/g,"\\\\ ").replace(/\s*\n\s*/g,"\\\\ "))).replace(/\n/g,"<br>"),kn=n=>String(n).replace(/\d/g,d=>"០១២៣៤៥៦៧៨៩"[d]);
