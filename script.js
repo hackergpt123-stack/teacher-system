@@ -12,13 +12,13 @@
           Firebase Authentication មិនដំណើរការពេលបើកឯកសារដោយចុចពីរដង (file://)។
    ======================================================================== */
 (function () {
-  var firebaseConfig = {
-    apiKey: "AIzaSyAtfudfLGNHCFYUwGxLM8_lfSZ-jYWQ6J8",
-    authDomain: "math-teacher-system-bt.firebaseapp.com",
-    projectId: "math-teacher-system-bt",
-    storageBucket: "math-teacher-system-bt.firebasestorage.app",
-    messagingSenderId: "134725787928",
-    appId: "1:134725787928:web:50343e4b7c7247833c3e6d"
+var firebaseConfig = {
+    apiKey: "AIzaSyDLMqiI5PBmINWKNxWz4BMXdndL40TeXTo",
+    authDomain: "math-vadh.firebaseapp.com",
+    projectId: "math-vadh",
+    storageBucket: "math-vadh.firebasestorage.app",
+    messagingSenderId: "475608743844",
+    appId: "1:475608743844:web:f53dec60ae959d4613cb31"
   };
   var B = "https://www.gstatic.com/firebasejs/10.8.0/";
   /* ផ្ទុក SDK ដោយ dynamic import ដើម្បីឱ្យកូដកម្មវិធីគោលនៅជា script ធម្មតា */
